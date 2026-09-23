@@ -66,3 +66,9 @@ jobs:
             git checkout ${{ github.sha }}
             docker compose ${{ inputs.compose-files }} --env-file ${{ inputs.env-file }} up -d --build
             docker image prune -f
+            # The build cache is what actually fills the box's disk. image prune only
+            # removes *dangling* images, and on Main Vibe it reclaims nothing: every
+            # image is referenced by a running container. Measured there mid-deploy,
+            # images were 8.4GB (all in use) against 4.1GB of build cache, 3.0GB of it
+            # reclaimable - and one image build put ~900MB straight back.
+            docker builder prune -f
