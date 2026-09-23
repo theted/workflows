@@ -1,0 +1,68 @@
+# Reusable: rebuild a compose stack in place on the shared EC2 box.
+#
+#   jobs:
+#     deploy:
+#       uses: theted/workflows/.github/workflows/deploy-ec2.yml@master
+#       with:
+#         app-dir: /opt/my-app
+#         compose-files: -f docker-compose.base.yml -f docker-compose.ec2.yml
+#       secrets: inherit
+#
+# See `ec2-docker.md` in the private theted/infrastructure repo, and claim a localhost port in its
+# `the-box.md` before the first deploy.
+
+name: Deploy service to EC2
+
+on:
+  workflow_call:
+    inputs:
+      app-dir:
+        type: string
+        required: true
+      compose-files:
+        type: string
+        default: '-f docker-compose.yml'
+      env-file:
+        type: string
+        default: .env
+      # docker compose build on a t2.medium regularly exceeds the action's 10m default.
+      timeout:
+        type: string
+        default: 30m
+    secrets:
+      EC2_HOST:
+        required: true
+      EC2_USER:
+        required: true
+      EC2_SSH_KEY:
+        required: true
+
+permissions:
+  contents: read
+
+# One deploy at a time per calling repo. Two overlapping runs would interleave their builds in the
+# same working tree on the box.
+concurrency:
+  group: deploy-ec2-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          command_timeout: ${{ inputs.timeout }}
+          # Checking out the triggering commit rather than a branch keeps the deploy reproducible
+          # and stops a race with anything that lands while the build is running.
+          script: |
+            set -e
+            cd ${{ inputs.app-dir }}
+            git fetch origin
+            git checkout ${{ github.sha }}
+            docker compose ${{ inputs.compose-files }} --env-file ${{ inputs.env-file }} up -d --build
+            docker image prune -f

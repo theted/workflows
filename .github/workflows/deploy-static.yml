@@ -1,0 +1,110 @@
+# Reusable: build a static site and publish it to S3 + CloudFront.
+#
+# Called by the app repos so the cache-header policy and the upload ordering are written once.
+# `static-s3.md` in the private theted/infrastructure repo has the reasoning: why the bundle goes up
+# in three passes, and why the large, never-changing payloads deliberately get max-age=0.
+#
+#   jobs:
+#     deploy:
+#       uses: theted/workflows/.github/workflows/deploy-static.yml@master
+#       with:
+#         build-command: npm run build
+#       secrets: inherit
+
+name: Deploy static site to S3
+
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        type: string
+        default: '22'
+      build-command:
+        type: string
+        default: npm run build
+      install-command:
+        type: string
+        default: npm ci
+      dist-dir:
+        type: string
+        default: dist
+      # Everything matching this is assumed content-addressed and takes the immutable header.
+      immutable-glob:
+        type: string
+        default: 'assets/*'
+    secrets:
+      AWS_ACCESS_KEY_ID:
+        required: true
+      AWS_SECRET_ACCESS_KEY:
+        required: true
+      AWS_REGION:
+        required: true
+      S3_BUCKET:
+        required: true
+      CLOUDFRONT_DISTRIBUTION_ID:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      DISTRIBUTION_ID: ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }}
+      DIST: ${{ inputs.dist-dir }}
+      GLOB: ${{ inputs.immutable-glob }}
+      S3_BUCKET: ${{ secrets.S3_BUCKET }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: npm
+
+      - name: Install dependencies
+        run: ${{ inputs.install-command }}
+
+      - name: Build
+        run: ${{ inputs.build-command }}
+
+      - name: Check the build produced something
+        run: |
+          test -f "$DIST/index.html" || { echo "no $DIST/index.html — did the build run?"; exit 1; }
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      # Pass 1 — new fingerprinted assets, no --delete. For a moment both generations are live, so
+      # every index.html already in a browser still resolves.
+      - name: Upload fingerprinted assets
+        run: |
+          aws s3 sync "$DIST/" "s3://${S3_BUCKET}" \
+            --exclude "*" --include "$GLOB" \
+            --cache-control "public, max-age=31536000, immutable"
+
+      # Pass 2 — the new index.html goes live, pointing at assets that are already there.
+      - name: Publish index.html and everything with a stable URL
+        run: |
+          aws s3 sync "$DIST/" "s3://${S3_BUCKET}" --delete \
+            --exclude "$GLOB" \
+            --cache-control "public, max-age=0, must-revalidate"
+
+      # Pass 3 — now that nothing points at them, drop the superseded bundles. The filters apply to
+      # the delete pass too, so this only ever touches the fingerprinted set.
+      - name: Remove superseded assets
+        run: |
+          aws s3 sync "$DIST/" "s3://${S3_BUCKET}" --delete \
+            --exclude "*" --include "$GLOB" \
+            --cache-control "public, max-age=31536000, immutable"
+
+      - name: Invalidate CloudFront cache
+        if: ${{ env.DISTRIBUTION_ID != '' }}
+        run: aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION_ID" --paths "/*"
