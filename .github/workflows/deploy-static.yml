@@ -11,6 +11,11 @@
 #         build-command: npm run build
 #       secrets: inherit
 
+# Every `uses:` here is pinned to a commit sha rather than a moving tag. A tag like @v4 is resolved
+# fresh on every run, so the same workflow file can behave differently from one day to the next
+# without anything in this repo changing — and it serves three live sites at once. The trailing
+# comment is the release the sha belongs to; Dependabot raises a PR when there is a newer one.
+
 name: Deploy static site to S3
 
 on:
@@ -57,10 +62,10 @@ jobs:
       S3_BUCKET: ${{ secrets.S3_BUCKET }}
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: ${{ inputs.node-version }}
           cache: npm
@@ -76,7 +81,7 @@ jobs:
           test -f "$DIST/index.html" || { echo "no $DIST/index.html — did the build run?"; exit 1; }
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}

@@ -1,0 +1,11 @@
+# The workflows here pin every action to a commit sha, which stops a tag moving under three live
+# sites but also freezes them forever if nothing looks. Dependabot is the other half: it raises a PR
+# when a pinned action has a newer release, rewriting the sha and its trailing version comment.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "actions"
